@@ -252,17 +252,15 @@ export let NavigationInstruction = class NavigationInstruction {
 
       if (viewPortInstruction.strategy === activationStrategy.replace) {
         if (viewPortInstruction.childNavigationInstruction && viewPortInstruction.childNavigationInstruction.parentCatchHandler) {
-          loads.push(viewPortInstruction.childNavigationInstruction._commitChanges());
+          loads.push(viewPortInstruction.childNavigationInstruction._commitChanges(waitToSwap));
         } else {
           if (waitToSwap) {
             delaySwaps.push({ viewPort, viewPortInstruction });
           }
           loads.push(viewPort.process(viewPortInstruction, waitToSwap).then(x => {
             if (viewPortInstruction.childNavigationInstruction) {
-              return viewPortInstruction.childNavigationInstruction._commitChanges();
+              return viewPortInstruction.childNavigationInstruction._commitChanges(waitToSwap);
             }
-
-            return undefined;
           }));
         }
       } else {
@@ -425,6 +423,11 @@ export let RouterConfiguration = class RouterConfiguration {
     return this.mapRoute(route);
   }
 
+  useViewPortDefaults(viewPortConfig) {
+    this.viewPortDefaults = viewPortConfig;
+    return this;
+  }
+
   mapRoute(config) {
     this.instructions.push(router => {
       let routeConfigs = [];
@@ -477,6 +480,10 @@ export let RouterConfiguration = class RouterConfiguration {
       router.fallbackRoute = this._fallbackRoute;
     }
 
+    if (this.viewPortDefaults) {
+      router.useViewPortDefaults(this.viewPortDefaults);
+    }
+
     router.options = this.options;
 
     let pipelineSteps = this.pipelineSteps;
@@ -510,9 +517,8 @@ export let BuildNavigationPlanStep = class BuildNavigationPlanStep {
 };
 
 export function _buildNavigationPlan(instruction, forceLifecycleMinimum) {
-  let prev = instruction.previousInstruction;
+
   let config = instruction.config;
-  let plan = {};
 
   if ('redirect' in config) {
     let redirectLocation = _resolveUrl(config.redirect, getInstructionBaseUrl(instruction));
@@ -523,15 +529,21 @@ export function _buildNavigationPlan(instruction, forceLifecycleMinimum) {
     return Promise.reject(new Redirect(redirectLocation));
   }
 
+  let prev = instruction.previousInstruction;
+  let plan = {};
+  let defaults = instruction.router.viewPortDefaults;
+
   if (prev) {
     let newParams = hasDifferentParameterValues(prev, instruction);
     let pending = [];
 
     for (let viewPortName in prev.viewPortInstructions) {
-      let prevViewPortInstruction = prev.viewPortInstructions[viewPortName];
-      let nextViewPortConfig = config.viewPorts[viewPortName];
 
-      if (!nextViewPortConfig) throw new Error(`Invalid Route Config: Configuration for viewPort "${viewPortName}" was not found for route: "${instruction.config.route}."`);
+      let prevViewPortInstruction = prev.viewPortInstructions[viewPortName];
+      let nextViewPortConfig = viewPortName in config.viewPorts ? config.viewPorts[viewPortName] : prevViewPortInstruction;
+      if (nextViewPortConfig.moduleId === null && viewPortName in instruction.router.viewPortDefaults) {
+        nextViewPortConfig = defaults[viewPortName];
+      }
 
       let viewPortPlan = plan[viewPortName] = {
         name: viewPortName,
@@ -567,17 +579,22 @@ export function _buildNavigationPlan(instruction, forceLifecycleMinimum) {
     }
 
     return Promise.all(pending).then(() => plan);
-  }
+  } else {
 
-  for (let viewPortName in config.viewPorts) {
-    plan[viewPortName] = {
-      name: viewPortName,
-      strategy: activationStrategy.replace,
-      config: instruction.config.viewPorts[viewPortName]
-    };
-  }
+    for (let viewPortName in instruction.router.viewPorts) {
+      let viewPortConfig = instruction.config.viewPorts[viewPortName] || { moduleId: null };
+      if (viewPortConfig.moduleId === null && viewPortName in instruction.router.viewPortDefaults) {
+        viewPortConfig = defaults[viewPortName];
+      }
+      plan[viewPortName] = {
+        name: viewPortName,
+        strategy: activationStrategy.replace,
+        config: viewPortConfig
+      };
+    }
 
-  return Promise.resolve(plan);
+    return Promise.resolve(plan);
+  }
 }
 
 function hasDifferentParameterValues(prev, next) {
@@ -643,6 +660,7 @@ export let Router = class Router {
   constructor(container, history) {
     this.parent = null;
     this.options = {};
+    this.viewPortDefaults = {};
 
     this.transformTitle = title => {
       if (this.parent) {
@@ -666,6 +684,7 @@ export let Router = class Router {
     this.isExplicitNavigationBack = false;
     this.navigation = [];
     this.currentInstruction = null;
+    this.viewPortDefaults = {};
     this._fallbackOrder = 100;
     this._recognizer = new RouteRecognizer();
     this._childRecognizer = new RouteRecognizer();
@@ -860,6 +879,15 @@ export let Router = class Router {
       } else {
         current.href = _normalizeAbsolutePath(current.config.href, this.history._hasPushState);
       }
+    }
+  }
+
+  useViewPortDefaults(viewPortDefaults) {
+    for (let viewPortName in viewPortDefaults) {
+      let viewPortConfig = viewPortDefaults[viewPortName];
+      this.viewPortDefaults[viewPortName] = {
+        moduleId: viewPortConfig.moduleId
+      };
     }
   }
 
@@ -1292,7 +1320,7 @@ function determineWhatToLoad(navigationInstruction, toLoad = []) {
 }
 
 function loadRoute(routeLoader, navigationInstruction, viewPortPlan) {
-  let moduleId = viewPortPlan.config.moduleId;
+  let moduleId = viewPortPlan.config ? viewPortPlan.config.moduleId : null;
 
   return loadComponent(routeLoader, navigationInstruction, viewPortPlan.config).then(component => {
     let viewPortInstruction = navigationInstruction.addViewPortInstruction(viewPortPlan.name, viewPortPlan.strategy, moduleId, component);

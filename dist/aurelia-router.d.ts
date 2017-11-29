@@ -182,7 +182,7 @@ export declare interface RouteConfig {
   /**
      * specifies the model parameter to pass to the layout view model's `activate` function.
      */
-  layoutModel?: string;
+  layoutModel?: any;
   [x: string]: any;
 }
 
@@ -491,7 +491,7 @@ export declare class NavModel {
   config: RouteConfig;
   
   /**
-    * The router associated with this navitation model.
+    * The router associated with this navigation model.
     */
   router: Router;
   constructor(router: Router, relativeHref: string);
@@ -584,6 +584,7 @@ export declare class RouterConfiguration {
   pipelineSteps: Array<Function | PipelineStep>;
   title: string;
   unknownRouteConfig: any;
+  viewPortDefaults: any;
   
   /**
     * Adds a step to be run during the [[Router]]'s navigation pipeline.
@@ -641,6 +642,15 @@ export declare class RouterConfiguration {
     * @chainable
     */
   map(route: RouteConfig | RouteConfig[]): RouterConfiguration;
+  
+  /**
+     * Configures defaults to use for any view ports.
+     *
+     * @param viewPortConfig a view port configuration object to use as a 
+     *  default, of the form { viewPortName: { moduleId } }.
+     * @chainable
+     */
+  useViewPortDefaults(viewPortConfig: any): any;
   
   /**
     * Maps a single route to be registered with the router.
@@ -729,6 +739,11 @@ export declare class Router {
   options: any;
   
   /**
+    * The defaults used when a viewport lacks specified content
+    */
+  viewPortDefaults: any;
+  
+  /**
     * Extension point to transform the document title before it is built and displayed.
     * By default, child routers delegate to the parent router, and the app router
     * returns the title unchanged.
@@ -776,7 +791,7 @@ export declare class Router {
     * Navigates to a new location.
     *
     * @param fragment The URL fragment to use as the navigation destination.
-    * @param options The navigation options.
+    * @param options The navigation options. See [[History.NavigationOptions]] for all available options.
     */
   navigate(fragment: string, options?: any): boolean;
   
@@ -786,7 +801,7 @@ export declare class Router {
     *
     * @param route The name of the route to use when generating the navigation location.
     * @param params The route parameters to be used when populating the route pattern.
-    * @param options The navigation options.
+    * @param options The navigation options. See [[History.NavigationOptions]] for all available options. 
     */
   navigateToRoute(route: string, params?: any, options?: any): boolean;
   
@@ -808,6 +823,7 @@ export declare class Router {
     *
     * @param name The name of the route whose pattern should be used to generate the fragment.
     * @param params The route params to be used to populate the route pattern.
+    * @param options If options.absolute = true, then absolute url will be generated; otherwise, it will be relative url.
     * @returns {string} A string containing the generated URL fragment.
     */
   generate(name: string, params?: any, options?: any): string;
@@ -858,6 +874,13 @@ export declare class Router {
     * Note: This method will likely move to a plugin in a future release.
     */
   refreshNavigation(): void;
+  
+  /** 
+     * Sets the default configuration for the view ports. This specifies how to
+     *  populate a view port for which no module is specified. The default is 
+     *  an empty view/view-model pair.
+     */
+  useViewPortDefaults(viewPortDefaults: any): any;
 }
 export declare class CanDeactivatePreviousStep {
   run(navigationInstruction: NavigationInstruction, next: Function): any;

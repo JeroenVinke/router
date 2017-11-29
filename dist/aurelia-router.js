@@ -401,17 +401,15 @@ export class NavigationInstruction {
 
       if (viewPortInstruction.strategy === activationStrategy.replace) {
         if (viewPortInstruction.childNavigationInstruction && viewPortInstruction.childNavigationInstruction.parentCatchHandler) {
-          loads.push(viewPortInstruction.childNavigationInstruction._commitChanges());
+          loads.push(viewPortInstruction.childNavigationInstruction._commitChanges(waitToSwap));
         } else {
           if (waitToSwap) {
             delaySwaps.push({viewPort, viewPortInstruction});
           }
           loads.push(viewPort.process(viewPortInstruction, waitToSwap).then((x) => {
             if (viewPortInstruction.childNavigationInstruction) {
-              return viewPortInstruction.childNavigationInstruction._commitChanges();
+              return viewPortInstruction.childNavigationInstruction._commitChanges(waitToSwap);
             }
-
-            return undefined;
           }));
         }
       } else {
@@ -506,7 +504,7 @@ export class NavModel {
   config: RouteConfig = null;
 
   /**
-  * The router associated with this navitation model.
+  * The router associated with this navigation model.
   */
   router: Router;
 
@@ -631,7 +629,7 @@ interface RouteConfig {
   /**
    * specifies the model parameter to pass to the layout view model's `activate` function.
    */
-  layoutModel?: string;
+  layoutModel?: any;
 
   [x: string]: any;
 }
@@ -822,6 +820,7 @@ export class RouterConfiguration {
   pipelineSteps: Array<Function|PipelineStep> = [];
   title: string;
   unknownRouteConfig: any;
+  viewPortDefaults: any;
 
   /**
   * Adds a step to be run during the [[Router]]'s navigation pipeline.
@@ -902,6 +901,18 @@ export class RouterConfiguration {
   }
 
   /**
+   * Configures defaults to use for any view ports.
+   *
+   * @param viewPortConfig a view port configuration object to use as a 
+   *  default, of the form { viewPortName: { moduleId } }.
+   * @chainable
+   */
+  useViewPortDefaults(viewPortConfig: any) {
+    this.viewPortDefaults = viewPortConfig;
+    return this;
+  }
+
+  /**
   * Maps a single route to be registered with the router.
   *
   * @param route The [[RouteConfig]] to map.
@@ -971,6 +982,10 @@ export class RouterConfiguration {
       router.fallbackRoute = this._fallbackRoute;
     }
 
+    if (this.viewPortDefaults) {
+      router.useViewPortDefaults(this.viewPortDefaults);
+    }
+
     router.options = this.options;
 
     let pipelineSteps = this.pipelineSteps;
@@ -1008,9 +1023,8 @@ export class BuildNavigationPlanStep {
 }
 
 export function _buildNavigationPlan(instruction: NavigationInstruction, forceLifecycleMinimum): Promise<Object> {
-  let prev = instruction.previousInstruction;
+
   let config = instruction.config;
-  let plan = {};
 
   if ('redirect' in config) {
     let redirectLocation = _resolveUrl(config.redirect, getInstructionBaseUrl(instruction));
@@ -1021,15 +1035,21 @@ export function _buildNavigationPlan(instruction: NavigationInstruction, forceLi
     return Promise.reject(new Redirect(redirectLocation));
   }
 
+  let prev = instruction.previousInstruction;
+  let plan = {};
+  let defaults = instruction.router.viewPortDefaults;
+
   if (prev) {
     let newParams = hasDifferentParameterValues(prev, instruction);
     let pending = [];
 
     for (let viewPortName in prev.viewPortInstructions) {
-      let prevViewPortInstruction = prev.viewPortInstructions[viewPortName];
-      let nextViewPortConfig = config.viewPorts[viewPortName];
 
-      if (!nextViewPortConfig) throw new Error(`Invalid Route Config: Configuration for viewPort "${viewPortName}" was not found for route: "${instruction.config.route}."`);
+      let prevViewPortInstruction = prev.viewPortInstructions[viewPortName];
+      let nextViewPortConfig = viewPortName in config.viewPorts ? config.viewPorts[viewPortName] : prevViewPortInstruction;
+      if (nextViewPortConfig.moduleId === null && viewPortName in instruction.router.viewPortDefaults) {
+        nextViewPortConfig = defaults[viewPortName];
+      }
 
       let viewPortPlan = plan[viewPortName] = {
         name: viewPortName,
@@ -1070,17 +1090,23 @@ export function _buildNavigationPlan(instruction: NavigationInstruction, forceLi
     }
 
     return Promise.all(pending).then(() => plan);
-  }
 
-  for (let viewPortName in config.viewPorts) {
-    plan[viewPortName] = {
-      name: viewPortName,
-      strategy: activationStrategy.replace,
-      config: instruction.config.viewPorts[viewPortName]
-    };
-  }
+  } else {
 
-  return Promise.resolve(plan);
+    for (let viewPortName in instruction.router.viewPorts) {
+      let viewPortConfig = instruction.config.viewPorts[viewPortName] || { moduleId: null };
+      if (viewPortConfig.moduleId === null && viewPortName in instruction.router.viewPortDefaults) {
+        viewPortConfig = defaults[viewPortName];
+      }
+      plan[viewPortName] = {
+        name: viewPortName, 
+        strategy: activationStrategy.replace,
+        config: viewPortConfig
+      }
+    }
+
+    return Promise.resolve(plan);
+  }  
 }
 
 function hasDifferentParameterValues(prev: NavigationInstruction, next: NavigationInstruction): boolean {
@@ -1197,6 +1223,11 @@ export class Router {
   options: any = {};
 
   /**
+  * The defaults used when a viewport lacks specified content
+  */
+  viewPortDefaults: any = {};
+
+  /**
   * Extension point to transform the document title before it is built and displayed.
   * By default, child routers delegate to the parent router, and the app router
   * returns the title unchanged.
@@ -1232,6 +1263,7 @@ export class Router {
     this.isExplicitNavigationBack = false;
     this.navigation = [];
     this.currentInstruction = null;
+    this.viewPortDefaults = {};
     this._fallbackOrder = 100;
     this._recognizer = new RouteRecognizer();
     this._childRecognizer = new RouteRecognizer();
@@ -1295,7 +1327,7 @@ export class Router {
   * Navigates to a new location.
   *
   * @param fragment The URL fragment to use as the navigation destination.
-  * @param options The navigation options.
+  * @param options The navigation options. See [[History.NavigationOptions]] for all available options.
   */
   navigate(fragment: string, options?: any): boolean {
     if (!this.isConfigured && this.parent) {
@@ -1312,7 +1344,7 @@ export class Router {
   *
   * @param route The name of the route to use when generating the navigation location.
   * @param params The route parameters to be used when populating the route pattern.
-  * @param options The navigation options.
+  * @param options The navigation options. See [[History.NavigationOptions]] for all available options. 
   */
   navigateToRoute(route: string, params?: any, options?: any): boolean {
     let path = this.generate(route, params);
@@ -1344,6 +1376,7 @@ export class Router {
   *
   * @param name The name of the route whose pattern should be used to generate the fragment.
   * @param params The route params to be used to populate the route pattern.
+  * @param options If options.absolute = true, then absolute url will be generated; otherwise, it will be relative url.
   * @returns {string} A string containing the generated URL fragment.
   */
   generate(name: string, params?: any, options?: any = {}): string {
@@ -1506,6 +1539,20 @@ export class Router {
         current.href = _createRootedPath(current.relativeHref, this.baseUrl, this.history._hasPushState);
       } else {
         current.href = _normalizeAbsolutePath(current.config.href, this.history._hasPushState);
+      }
+    }
+  }
+
+  /** 
+   * Sets the default configuration for the view ports. This specifies how to
+   *  populate a view port for which no module is specified. The default is 
+   *  an empty view/view-model pair.
+   */
+  useViewPortDefaults(viewPortDefaults: any) {
+    for (let viewPortName in viewPortDefaults) {
+      let viewPortConfig = viewPortDefaults[viewPortName];
+      this.viewPortDefaults[viewPortName] = {
+        moduleId: viewPortConfig.moduleId
       }
     }
   }
@@ -1979,7 +2026,7 @@ function determineWhatToLoad(navigationInstruction: NavigationInstruction, toLoa
 }
 
 function loadRoute(routeLoader: RouteLoader, navigationInstruction: NavigationInstruction, viewPortPlan: any) {
-  let moduleId = viewPortPlan.config.moduleId;
+  let moduleId = viewPortPlan.config ? viewPortPlan.config.moduleId : null;
 
   return loadComponent(routeLoader, navigationInstruction, viewPortPlan.config).then((component) => {
     let viewPortInstruction = navigationInstruction.addViewPortInstruction(
